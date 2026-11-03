@@ -1,4 +1,6 @@
-//! Dependency-free PNG encoder (8/16-bit, RGB or RGBA, stored deflate).
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! Dependency-free PNG encoder (8/16-bit, RGB or RGBA; adaptive row filters and deflate with dynamic Huffman codes)
+//! and decoder.
 use std::sync::OnceLock;
 
 fn crc_table() -> &'static [u32; 256] {
@@ -43,38 +45,341 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
 }
 
+/// Pick the best of the five PNG row filters for every row (smallest sum of absolute residuals) and apply it.
+fn filter_rows(plain: &[u8], h: usize, rb: usize, bpp: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(h * (rb + 1));
+    let zero = vec![0u8; rb];
+    let mut cand: Vec<Vec<u8>> = (0..5).map(|_| vec![0u8; rb]).collect();
+    for y in 0..h {
+        let row = &plain[y * rb..(y + 1) * rb];
+        let prev = if y == 0 { &zero[..] } else { &plain[(y - 1) * rb..y * rb] };
+        for i in 0..rb {
+            let a = if i >= bpp { row[i - bpp] } else { 0 };
+            let b = prev[i];
+            let c = if i >= bpp { prev[i - bpp] } else { 0 };
+            let x = row[i];
+            cand[0][i] = x;
+            cand[1][i] = x.wrapping_sub(a);
+            cand[2][i] = x.wrapping_sub(b);
+            cand[3][i] = x.wrapping_sub(((a as u16 + b as u16) / 2) as u8);
+            let (pa, pb, pc) = ((b as i32 - c as i32).abs(), (a as i32 - c as i32).abs(), (a as i32 + b as i32 - 2 * c as i32).abs());
+            let pred = if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c };
+            cand[4][i] = x.wrapping_sub(pred);
+        }
+        let cost = |v: &Vec<u8>| -> u64 { v.iter().map(|&d| (d as i8).unsigned_abs() as u64).sum() };
+        let best = (0..5).min_by_key(|&f| cost(&cand[f])).unwrap_or(0);
+        out.push(best as u8);
+        out.extend_from_slice(&cand[best]);
+    }
+    out
+}
+
+// ---- deflate (LZ77 with hash chains and lazy matching, dynamic Huffman blocks)
+struct BitW {
+    out: Vec<u8>,
+    acc: u64,
+    n: u32,
+}
+
+impl BitW {
+    fn put(&mut self, v: u32, bits: u32) {
+        self.acc |= (v as u64) << self.n;
+        self.n += bits;
+        while self.n >= 8 {
+            self.out.push(self.acc as u8);
+            self.acc >>= 8;
+            self.n -= 8;
+        }
+    }
+    /// Huffman codes are sent most significant bit first
+    fn code(&mut self, code: u32, len: u32) {
+        let mut r = 0u32;
+        for i in 0..len {
+            r |= ((code >> i) & 1) << (len - 1 - i);
+        }
+        self.put(r, len);
+    }
+    fn flush(&mut self) {
+        if self.n > 0 {
+            self.out.push(self.acc as u8);
+            self.acc = 0;
+            self.n = 0;
+        }
+    }
+}
+
+const LEN_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+
+fn len_code(l: usize) -> usize {
+    LEN_BASE.iter().rposition(|&b| b as usize <= l).unwrap_or(0)
+}
+
+fn dist_code(d: usize) -> usize {
+    DIST_BASE.iter().rposition(|&b| b as usize <= d).unwrap_or(0)
+}
+
+/// Huffman code lengths for the given symbol counts, none longer than `limit` (counts are flattened until they fit).
+fn huff_lengths(freq: &[u32], limit: u8) -> Vec<u8> {
+    let n = freq.len();
+    let mut f: Vec<u64> = freq.iter().map(|&x| x as u64).collect();
+    loop {
+        let used: Vec<usize> = (0..n).filter(|&i| f[i] > 0).collect();
+        let mut len = vec![0u8; n];
+        if used.is_empty() {
+            return len;
+        }
+        if used.len() == 1 {
+            len[used[0]] = 1;
+            return len;
+        }
+        // nodes: (weight, left, right) with leaves first
+        let mut w: Vec<u64> = used.iter().map(|&i| f[i]).collect();
+        let mut parent: Vec<usize> = vec![usize::MAX; used.len()];
+        let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, usize)>> = (0..used.len()).map(|i| std::cmp::Reverse((w[i], i))).collect();
+        while heap.len() > 1 {
+            let std::cmp::Reverse((wa, a)) = heap.pop().unwrap();
+            let std::cmp::Reverse((wb, b)) = heap.pop().unwrap();
+            let id = w.len();
+            w.push(wa + wb);
+            parent.push(usize::MAX);
+            parent[a] = id;
+            parent[b] = id;
+            heap.push(std::cmp::Reverse((wa + wb, id)));
+        }
+        let mut ok = true;
+        for (k, &sym) in used.iter().enumerate() {
+            let (mut d, mut at) = (0u32, k);
+            while parent[at] != usize::MAX {
+                at = parent[at];
+                d += 1;
+            }
+            if d > limit as u32 {
+                ok = false;
+            }
+            len[sym] = d.min(255) as u8;
+        }
+        if ok {
+            return len;
+        }
+        for x in f.iter_mut() {
+            if *x > 0 {
+                *x = (*x / 2).max(1);
+            }
+        }
+    }
+}
+
+/// Canonical codes for the given lengths.
+fn huff_codes(len: &[u8]) -> Vec<u32> {
+    let mut count = [0u32; 16];
+    for &l in len {
+        count[l as usize] += 1;
+    }
+    count[0] = 0;
+    let mut next = [0u32; 16];
+    let mut code = 0u32;
+    for b in 1..16 {
+        code = (code + count[b - 1]) << 1;
+        next[b] = code;
+    }
+    len.iter()
+        .map(|&l| {
+            if l == 0 {
+                0
+            } else {
+                let c = next[l as usize];
+                next[l as usize] += 1;
+                c
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum Tok {
+    Lit(u8),
+    Match(u16, u16),
+}
+
+fn lz77(data: &[u8]) -> Vec<Tok> {
+    const WIN: usize = 32768;
+    const HBITS: u32 = 15;
+    const MAX_CHAIN: usize = 24;
+    const NICE: usize = 128;
+    let n = data.len();
+    let mut toks = Vec::with_capacity(n / 2 + 16);
+    let mut head = vec![u32::MAX; 1 << HBITS];
+    let mut prev = vec![u32::MAX; WIN];
+    let hash = |i: usize| -> usize { ((data[i] as u32) << 10 ^ (data[i + 1] as u32) << 5 ^ data[i + 2] as u32).wrapping_mul(2654435761) as usize >> (32 - HBITS) as usize & ((1 << HBITS) - 1) };
+    let insert = |head: &mut Vec<u32>, prev: &mut Vec<u32>, i: usize| {
+        if i + 2 < n {
+            let h = hash(i);
+            prev[i & (WIN - 1)] = head[h];
+            head[h] = i as u32;
+        }
+    };
+    let find = |head: &Vec<u32>, prev: &Vec<u32>, i: usize| -> (usize, usize) {
+        if i + 2 >= n {
+            return (0, 0);
+        }
+        let maxl = (n - i).min(258);
+        let (mut best_l, mut best_d) = (0usize, 0usize);
+        let mut cand = head[hash(i)];
+        let mut chain = 0;
+        while cand != u32::MAX && chain < MAX_CHAIN {
+            let c = cand as usize;
+            if c >= i || i - c > WIN {
+                break;
+            }
+            if data[c + best_l.min(maxl - 1)] == data[i + best_l.min(maxl - 1)] {
+                let mut l = 0;
+                while l < maxl && data[c + l] == data[i + l] {
+                    l += 1;
+                }
+                if l > best_l {
+                    best_l = l;
+                    best_d = i - c;
+                    if l >= NICE || l == maxl {
+                        break;
+                    }
+                }
+            }
+            let nx = prev[c & (WIN - 1)];
+            if nx != u32::MAX && nx as usize >= c {
+                break;
+            }
+            cand = nx;
+            chain += 1;
+        }
+        if best_l >= 3 {
+            (best_l, best_d)
+        } else {
+            (0, 0)
+        }
+    };
+    let mut i = 0;
+    while i < n {
+        let (l, d) = find(&head, &prev, i);
+        if l >= 3 {
+            // lazy matching: a longer match one byte later wins
+            insert(&mut head, &mut prev, i);
+            let (l2, _) = if l < NICE { find(&head, &prev, i + 1) } else { (0, 0) };
+            if l2 > l + 1 {
+                toks.push(Tok::Lit(data[i]));
+                i += 1;
+                continue;
+            }
+            toks.push(Tok::Match(l as u16, d as u16));
+            for k in 1..l {
+                insert(&mut head, &mut prev, i + k);
+            }
+            i += l;
+        } else {
+            insert(&mut head, &mut prev, i);
+            toks.push(Tok::Lit(data[i]));
+            i += 1;
+        }
+    }
+    toks
+}
+
+/// A raw deflate stream (RFC 1951) of `data`.
+fn deflate(data: &[u8]) -> Vec<u8> {
+    let toks = lz77(data);
+    let mut bw = BitW { out: Vec::with_capacity(data.len() / 3 + 64), acc: 0, n: 0 };
+    let blocks: Vec<&[Tok]> = if toks.is_empty() { vec![&toks[..]] } else { toks.chunks(1 << 16).collect() };
+    let nb = blocks.len();
+    for (bi, blk) in blocks.into_iter().enumerate() {
+        let mut lf = vec![0u32; 286];
+        let mut df = vec![0u32; 30];
+        for t in blk {
+            match *t {
+                Tok::Lit(b) => lf[b as usize] += 1,
+                Tok::Match(l, d) => {
+                    lf[257 + len_code(l as usize)] += 1;
+                    df[dist_code(d as usize)] += 1;
+                }
+            }
+        }
+        lf[256] = 1;
+        if df.iter().all(|&x| x == 0) {
+            df[0] = 1;
+        }
+        let ll = huff_lengths(&lf, 15);
+        let dl = huff_lengths(&df, 15);
+        let (lc, dc) = (huff_codes(&ll), huff_codes(&dl));
+        let hlit = ll.iter().rposition(|&l| l > 0).map(|p| p + 1).unwrap_or(257).max(257);
+        let hdist = dl.iter().rposition(|&l| l > 0).map(|p| p + 1).unwrap_or(1).max(1);
+        // code length alphabet: the lengths are written without run-length symbols
+        let mut cf = vec![0u32; 19];
+        for &l in ll[..hlit].iter().chain(dl[..hdist].iter()) {
+            cf[l as usize] += 1;
+        }
+        let cl = huff_lengths(&cf, 7);
+        let cc = huff_codes(&cl);
+        const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+        let hclen = ORDER.iter().rposition(|&o| cl[o] > 0).map(|p| p + 1).unwrap_or(4).max(4);
+        bw.put(if bi + 1 == nb { 1 } else { 0 }, 1);
+        bw.put(2, 2);
+        bw.put((hlit - 257) as u32, 5);
+        bw.put((hdist - 1) as u32, 5);
+        bw.put((hclen - 4) as u32, 4);
+        for &o in &ORDER[..hclen] {
+            bw.put(cl[o] as u32, 3);
+        }
+        for &l in ll[..hlit].iter().chain(dl[..hdist].iter()) {
+            bw.code(cc[l as usize], cl[l as usize] as u32);
+        }
+        for t in blk {
+            match *t {
+                Tok::Lit(b) => bw.code(lc[b as usize], ll[b as usize] as u32),
+                Tok::Match(l, d) => {
+                    let (l, d) = (l as usize, d as usize);
+                    let k = len_code(l);
+                    bw.code(lc[257 + k], ll[257 + k] as u32);
+                    bw.put((l - LEN_BASE[k] as usize) as u32, LEN_EXTRA[k] as u32);
+                    let k = dist_code(d);
+                    bw.code(dc[k], dl[k] as u32);
+                    bw.put((d - DIST_BASE[k] as usize) as u32, DIST_EXTRA[k] as u32);
+                }
+            }
+        }
+        bw.code(lc[256], ll[256] as u32);
+    }
+    bw.flush();
+    bw.out
+}
+
 /// Encode RGBA float pixels (0..1). `depth` must be 8 or 16 (anything else becomes 8).
 pub fn encode(w: usize, h: usize, px: &[[f32; 4]], depth: u8) -> Vec<u8> {
     let depth = if depth == 16 { 16 } else { 8 };
     let opaque = px.iter().all(|p| p[3] >= 0.9999);
     let ch = if opaque { 3 } else { 4 };
     let bps = (depth / 8) as usize;
-    let mut raw = Vec::with_capacity(h * (1 + w * ch * bps));
+    let row_bytes = w * ch * bps;
+    let mut plain = vec![0u8; h * row_bytes];
     for y in 0..h {
-        raw.push(0u8);
+        let mut o = y * row_bytes;
         for x in 0..w {
             let p = px.get(y * w + x).copied().unwrap_or([0.0; 4]);
             for c in p.iter().take(ch) {
                 let v = c.clamp(0.0, 1.0);
                 if depth == 16 {
-                    raw.extend_from_slice(&((v * 65535.0 + 0.5) as u16).to_be_bytes());
+                    plain[o..o + 2].copy_from_slice(&((v * 65535.0 + 0.5) as u16).to_be_bytes());
+                    o += 2;
                 } else {
-                    raw.push((v * 255.0 + 0.5) as u8);
+                    plain[o] = (v * 255.0 + 0.5) as u8;
+                    o += 1;
                 }
             }
         }
     }
-    let mut z = vec![0x78, 0x01];
-    let mut blocks = raw.chunks(65535).peekable();
-    if blocks.peek().is_none() {
-        z.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
-    }
-    while let Some(b) = blocks.next() {
-        z.push(if blocks.peek().is_none() { 1 } else { 0 });
-        z.extend_from_slice(&(b.len() as u16).to_le_bytes());
-        z.extend_from_slice(&(!(b.len() as u16)).to_le_bytes());
-        z.extend_from_slice(b);
-    }
+    let raw = filter_rows(&plain, h, row_bytes, ch * bps);
+    let mut z = vec![0x78, 0x9c];
+    z.extend_from_slice(&deflate(&raw));
     z.extend_from_slice(&adler32(&raw).to_be_bytes());
 
     let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];

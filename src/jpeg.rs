@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Dependency-free baseline JPEG encoder (4:4:4, standard Huffman tables).
 use crate::tex::Tex;
 

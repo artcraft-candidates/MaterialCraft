@@ -1,0 +1,105 @@
+# What the numbered settings ("dropdowns") of the standard library graphs mean in MaterialCraft: one line per
+# setting, `<graph id> <parameter> = <label of 0>|<label of 1>|...`. The labels say what MaterialCraft draws for each
+# number (how sbs_adapt.rs reads it), so they are our own reading, not text taken from the library.
+#   <graph id> may be `package/graph`, may end with `*` (every graph whose id starts with the rest) or be `*` alone
+#   (every graph); a line naming the package wins over one that does not;
+#   a label `N:text` gives the number explicitly (numbers that are left out are unused);
+#   labels marked "(assumed)" are not yet checked against a reference render.
+
+# normal maps: 0 is DirectX (green points down), 1 OpenGL
+* normal_format = DirectX|OpenGL
+* Normal_Format = DirectX|OpenGL
+curvature_sobel input_normal_type = DirectX|OpenGL
+vector_warp* vector_format = DirectX|OpenGL
+
+# scatter nodes (Tile Generator, Tile Sampler, Splatter Circular)
+tile_generator* pattern = None|Image input|Square|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+tile_sampler* pattern = None|Image input|Square|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+splatter_circular* pattern = None|Image input|Square|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+tile_generator* blending_mode = Add / Sub|Max|Add|Alpha blend
+tile_sampler* blending_mode = Add / Sub|Max|Add|Alpha blend
+splatter_circular* blending_mode = Add / Sub|Max|Add|Alpha blend
+tile_generator* size_mode = Relative to the cell|Absolute (fraction of the image)|Pixels
+tile_sampler* size_mode = Absolute (fraction of the image)|Relative to the cell|Pixels
+tile_generator* pattern_input_distribution = Random|By pattern number|By ring number
+tile_sampler* pattern_input_distribution = Random|By pattern number|By ring number
+splatter_circular* pattern_input_distribution = Random|By pattern number|By ring number
+tile_generator* pattern_symmetry_random_mode = Horizontal|Vertical|Horizontal and vertical
+tile_sampler* pattern_symmetry_random_mode = Horizontal|Vertical|Horizontal and vertical
+splatter_circular* pattern_symmetry_random_mode = Horizontal|Vertical|Horizontal and vertical
+tile_generator* pattern_rotation = 0 degrees|90 degrees|180 degrees|270 degrees
+tile_sampler* pattern_rotation = 0 degrees|90 degrees|180 degrees|270 degrees
+tile_sampler* offset_type = Rows (horizontal)|Columns (vertical)
+
+# shapes: the newer Shape draws a dome for 1 (checked); 2.. are the shared pattern list
+shape/shape Pattern = None|Square|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+pattern_shape/shape Pattern = None|Dome|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+shape_base pattern = None|Dome|Disc|Paraboloid|Bell|Gaussian|Thorn|Pyramid|Brick|Gradation|Waves|Half Bell|Ridged Bell|Crescent|Capsule|Cone
+
+# triplanar projection
+triplanar* projection = All axes (assumed)|X only (assumed)|Y only (assumed)|Z only (assumed)
+triplanar* blending_mode = Linear (assumed)|Advanced (assumed)
+triplanar_3 image_inputs = 1 input|3 inputs
+triplanar_grayscale_3 image_inputs = 1 input|3 inputs
+
+# noises
+voronoi* style = F1 (distance)|Random color|Edge|F2|F2 - F1|F1 * F2|F1 / F2
+voronoi* distance_mode = Euclidean|Manhattan|Chebyshev|Minkowski
+voronoi* random_color_seed_mode = Global (node seed)|Manual
+voronoi_fractal blend_mode = Add|Max|Min
+gradient_linear_* rotation = 0 degrees|90 degrees|180 degrees|270 degrees
+gradient_radial shape = Round|Square
+triangle_grid* color_output = Smooth heights|Flat triangles|Edge distance
+
+# filters
+# the library Blend numbers its modes as the built-in blend does (assumed)
+blend/blend Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max (Lighten)|Min (Darken)|Switch|Divide|Overlay|Screen|Soft light
+crop* filtering = Bilinear|Nearest
+bevel bevel_mode = Round|Angular
+mirror* mirror_type = Mirror X axis|Mirror Y axis|Mirror corner
+mirror* corner_type = Top left|Top right|Bottom left|Bottom right
+multi_directional_warp* mode = Average|Max|Min|Chain
+multi_directional_warp* directions = 1:1 direction|2:2 directions|4:4 directions
+normal_combine blend_quality = Whiteout|Channel mixer|Detail oriented
+threshold mode = Greater|Greater or equal|Lower|Lower or equal
+slope_blur* mode = 5:Max (assumed)|6:Min (assumed)|7:Blur
+
+# older material graphs (nodes10_ma.rs); the library does not say what their numbers mean
+directionnal_leaks dirt_map_input = Color|Image (assumed)
+edge_blur image_input = Color|Image (assumed)
+edge_dirt image_input = Color|Image (assumed)
+edge_spatter image_input = Color|Image (assumed)
+selective_dirt image_input = Color|Image (assumed)
+random_dirt image_input = Generated Noise|Input Pattern (assumed)
+metal_weathering/metal_weathering Rust_Verdigris = Rust|Verdigris (assumed)
+moss_weathering/moss_weahtering use_mask = Off|On (assumed)
+moss_weathering/moss_weahtering roughness_type = Glossiness|Roughness (assumed)
+moss_weathering/moss_weahtering reflectance_type = Specular|Metallic (assumed)
+material_composite/material_composite Ambient_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Diffuse_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Specular_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Height_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Opacity_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Emissive_Blending_Mode = Copy|Add|Subtract|Multiply|Add / Sub|Max|Min (assumed)
+material_composite/material_composite Normal_Method = Replace|Add Detail (assumed)
+# the Shape Splatter v2 family and Grid Atlas: read from the public node reference; the numbers are inferred (assumed),
+# and so are the parameter identifiers in sbs_library.txt: none was checked against a real file
+shape_splatter_v2 position_distribution_mode = 2D grid|Poisson disc|Uniform|Custom function
+shape_splatter_v2 position_distribution_sequence = R2|Halton
+shape_splatter_v2 output_normal_format = DirectX|OpenGL
+shape_splatter_v2 shape_type = SDF function|Cube|Sphere|Cylinder|Plane|Disc|Image input|Grid atlas|Pattern function
+shape_splatter_v2 grid_atlas_normal_format = DirectX|OpenGL
+shape_splatter_v2 size_mode = Auto|Absolute (texture space)
+shape_splatter_v2 line_position_offset_mode = All - Horizontal|All - Vertical|Quincunx - Horizontal|Quincunx - Vertical
+shape_splatter_v2 slope_rotation_input = Background|Vector map
+shape_splatter_v2 vector_map_rotation_axis = Normal|Z axis
+shape_splatter_v2 cap_uv_mode = Polar|Planar
+shape_splatter_v2_mapper_* projection_mode = From splatter UVs|Triplanar|Custom function
+shape_splatter_v2_mapper_color input_normal_format = DirectX|OpenGL
+shape_splatter_v2_mapper_* image_projection = 1 image|3 images|6 images|1 image per material ID
+shape_splatter_v2_mapper_* input_selection_mode = From splatter data|Manual|Random
+shape_splatter_v2_mapper_* color_input_blending_mode = Copy|Add|Subtract|Multiply|Overlay
+shape_splatter_v2_mapper_* tiling_mode = No tiling|Horizontal|Vertical|H and V
+shape_splatter_v2_to_mask output = Binary mask|Shape ID|Material ID|Shape ID (normalized)|Material ID (normalized)
+shape_splatter_v2_to_mask material_pattern_id_mask_combination = None|AND|OR
+grid_atlas_* output_size_mode = Manual|Automatic ratio

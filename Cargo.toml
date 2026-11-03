@@ -1,18 +1,33 @@
 [package]
 name = "materialcraft"
-version = "0.1.0"
+version = "0.6.0"
 edition = "2021"
 description = "Procedural, node-based material authoring engine in pure Rust"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
 
 [features]
 default = []
-gui = ["dep:eframe", "dep:rfd"]
+gui = ["dep:eframe", "dep:rfd", "gpu", "craft"]
+gpu = ["dep:wgpu", "dep:pollster"]
+# shared Craft libraries (MIT OR Apache-2.0): safe saves, settings, docking UI, colour management
+craft = ["dep:craft-atomic", "dep:craft-settings", "dep:craft-cms", "dep:craft-ui", "dep:craft-quit", "dep:serde"]
+cms = ["dep:craft-cms"]
 
 [dependencies]
-eframe = { version = "0.29", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+wgpu = { version = "22", optional = true, default-features = false, features = ["wgsl", "dx12", "metal"] }
+pollster = { version = "0.3", optional = true }
+eframe = { version = "0.36", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "async-std"] }
+
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "04e83f095ab080c5672243514f9a44ca6364b0e2", optional = true }
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "04e83f095ab080c5672243514f9a44ca6364b0e2", optional = true }
+craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "04e83f095ab080c5672243514f9a44ca6364b0e2", optional = true }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "04e83f095ab080c5672243514f9a44ca6364b0e2", optional = true, features = ["serde"] }
+craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "04e83f095ab080c5672243514f9a44ca6364b0e2", optional = true, features = ["egui"] }
+serde = { version = "1", features = ["derive"], optional = true }
+exr = { version = "1.74", default-features = false }
 
 [[bin]]
 name = "materialcraft"
@@ -23,7 +38,17 @@ name = "materialcraft-gui"
 path = "src/gui.rs"
 required-features = ["gui"]
 
+[[example]]
+name = "gpu_shot"
+path = "examples/gpu_shot.rs"
+required-features = ["gui"]
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[[example]]
+name = "bench3d"
+path = "examples/bench3d.rs"
+required-features = ["gui"]

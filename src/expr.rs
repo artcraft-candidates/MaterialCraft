@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Mini expression language for the Pixel Processor / function nodes.
 use crate::noise;
 use crate::tex::{lum, Tex};

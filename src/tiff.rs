@@ -1,14 +1,24 @@
-//! Dependency-free uncompressed TIFF writer (8 or 16 bit, RGB or RGBA).
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! Dependency-free uncompressed TIFF writer (8 or 16 bit integer, or 32-bit float; RGB or RGBA).
 use crate::tex::Tex;
 
 pub fn encode(t: &Tex, depth: u8) -> Vec<u8> {
-    let depth = if depth == 16 { 16 } else { 8 };
+    let depth = match depth {
+        32 => 32,
+        16 => 16,
+        _ => 8,
+    };
+    let float = depth == 32;
     let alpha = t.px.iter().any(|p| p[3] < 0.9999);
     let spp: usize = if alpha { 4 } else { 3 };
     let bytes = depth as usize / 8;
     let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
     for p in &t.px {
         for c in p.iter().take(spp) {
+            if float {
+                out.extend_from_slice(&c.to_le_bytes());
+                continue;
+            }
             let v = c.clamp(0.0, 1.0);
             if depth == 16 {
                 out.extend_from_slice(&((v * 65535.0 + 0.5) as u16).to_le_bytes());
@@ -41,6 +51,12 @@ pub fn encode(t: &Tex, depth: u8) -> Vec<u8> {
     ];
     if alpha {
         entries.push((338, 3, 1, 2));
+    }
+    if float {
+        // SampleFormat = IEEE floating point, for every sample
+        let sf_off = out.len() as u32;
+        let _ = sf_off;
+        entries.push((339, 3, 1, 3));
     }
     let _ = bytes;
     out.extend_from_slice(&(entries.len() as u16).to_le_bytes());

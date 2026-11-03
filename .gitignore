@@ -1,0 +1,10 @@
+RELEASE_PLAN.md
+.cargo/config.toml
+/release/
+/target
+/AiMaterials
+# your own .sbs projects used to test the importer: never committed
+/sbs_samples
+# reference material taken from an installed copy of another program: stays on this computer, never committed
+/Functional Node Framework SBS
+/reference
